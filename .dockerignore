@@ -1,0 +1,11 @@
+melanoma_env/
+.venv/
+__pycache__/
+*.pyc
+temp_uploads/
+.env
+.git/
+PDFS/
+frontend/
+test_images/
+*.log

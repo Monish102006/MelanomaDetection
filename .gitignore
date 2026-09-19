@@ -1,0 +1,42 @@
+# ── Python ────────────────────────────────────────────────
+melanoma_env/
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+
+# ── Environment & Secrets (NEVER push these) ─────────────
+.env
+*.env
+
+# ── Qdrant local data (too large, rebuild with create_vector_db.py) ──
+qdrant_data/
+
+# ── Temporary files ───────────────────────────────────────
+temp_uploads/
+*.log
+evaluation_results.json
+
+# ── IDE ───────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# ── OS files ──────────────────────────────────────────────
+Thumbs.db
+.DS_Store
+
+# ── Model weights (too large for GitHub, share via Google Drive) ──
+models/
+
+# ── Antigravity / Gemini ──────────────────────────────────
+.gemini/
+
+# ── Node modules (frontend) ──────────────────────────────
+node_modules/
+frontend/skin-arc-research-main/node_modules/
+frontend/skin-arc-research-main/dist/

@@ -1,0 +1,23 @@
+version: '3.8'
+
+services:
+  api:
+    build: .
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      - QDRANT_MODE=${QDRANT_MODE:-local}
+      - QDRANT_CLOUD_URL=${QDRANT_CLOUD_URL:-}
+      - QDRANT_CLOUD_API_KEY=${QDRANT_CLOUD_API_KEY:-}
+    volumes:
+      - ./qdrant_data:/app/qdrant_data
+      - ./medical_literature:/app/medical_literature
+      - ./models:/app/models
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3

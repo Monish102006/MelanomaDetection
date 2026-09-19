@@ -1,0 +1,198 @@
+@import "tailwindcss" source(none);
+@source "../src";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+/*
+ * MelanomaAI design system — cinematic dark research lab aesthetic.
+ * Deep navy/black surfaces, white typography, cyan/teal/electric-blue accents,
+ * restrained red for cautionary signals only.
+ */
+
+@theme inline {
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --radius-2xl: calc(var(--radius) + 8px);
+  --radius-3xl: calc(var(--radius) + 12px);
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-cyan: var(--brand-cyan);
+  --color-teal: var(--brand-teal);
+  --color-electric: var(--brand-electric);
+  --color-signal: var(--brand-signal);
+  --font-sans: "Space Grotesk", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, monospace;
+}
+
+:root {
+  --radius: 0.75rem;
+
+  --background: oklch(0.16 0.03 255);
+  --foreground: oklch(0.97 0.005 240);
+
+  --surface: oklch(0.21 0.035 254);
+  --surface-2: oklch(0.25 0.04 254);
+
+  --card: oklch(0.21 0.035 254);
+  --card-foreground: oklch(0.97 0.005 240);
+  --popover: oklch(0.19 0.033 254);
+  --popover-foreground: oklch(0.97 0.005 240);
+
+  --primary: oklch(0.82 0.14 197);
+  --primary-foreground: oklch(0.17 0.04 250);
+
+  --secondary: oklch(0.27 0.04 254);
+  --secondary-foreground: oklch(0.95 0.01 240);
+
+  --muted: oklch(0.26 0.035 254);
+  --muted-foreground: oklch(0.72 0.028 244);
+
+  --accent: oklch(0.66 0.16 250);
+  --accent-foreground: oklch(0.98 0.005 240);
+
+  --destructive: oklch(0.62 0.2 22);
+  --destructive-foreground: oklch(0.98 0.005 240);
+
+  --border: oklch(0.99 0 0 / 10%);
+  --input: oklch(0.99 0 0 / 14%);
+  --ring: oklch(0.82 0.14 197);
+
+  --brand-cyan: oklch(0.85 0.14 195);
+  --brand-teal: oklch(0.76 0.12 178);
+  --brand-electric: oklch(0.68 0.17 252);
+  --brand-signal: oklch(0.66 0.19 25);
+
+  --gradient-hero: radial-gradient(
+      120% 90% at 78% 20%,
+      color-mix(in oklab, var(--brand-electric) 26%, transparent),
+      transparent 60%
+    ),
+    radial-gradient(
+      90% 70% at 8% 90%,
+      color-mix(in oklab, var(--brand-teal) 18%, transparent),
+      transparent 65%
+    );
+  --gradient-line: linear-gradient(
+    90deg,
+    transparent,
+    var(--brand-cyan),
+    var(--brand-electric),
+    transparent
+  );
+  --shadow-glow: 0 0 0 1px color-mix(in oklab, var(--brand-cyan) 22%, transparent),
+    0 24px 70px -30px color-mix(in oklab, var(--brand-cyan) 55%, transparent);
+  --shadow-panel: 0 30px 90px -50px oklch(0 0 0 / 90%);
+}
+
+@layer base {
+  * {
+    border-color: var(--color-border);
+  }
+
+  html {
+    scroll-behavior: smooth;
+  }
+
+  body {
+    background-color: var(--color-background);
+    color: var(--color-foreground);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+  }
+
+  ::selection {
+    background: color-mix(in oklab, var(--brand-cyan) 35%, transparent);
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--brand-cyan);
+    outline-offset: 2px;
+  }
+}
+
+@utility glass {
+  background: color-mix(in oklab, var(--surface) 62%, transparent);
+  backdrop-filter: blur(18px) saturate(130%);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-panel);
+}
+
+@utility panel-glow {
+  box-shadow: var(--shadow-glow);
+}
+
+@utility text-gradient {
+  background: linear-gradient(
+    100deg,
+    var(--foreground) 20%,
+    var(--brand-cyan) 60%,
+    var(--brand-electric) 95%
+  );
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+@utility grid-backdrop {
+  background-image: linear-gradient(
+      to right,
+      color-mix(in oklab, var(--brand-cyan) 8%, transparent) 1px,
+      transparent 1px
+    ),
+    linear-gradient(
+      to bottom,
+      color-mix(in oklab, var(--brand-cyan) 8%, transparent) 1px,
+      transparent 1px
+    );
+  background-size: 64px 64px;
+}
+
+@utility label-mono {
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--muted-foreground);
+}
+
+@keyframes dash-flow {
+  to {
+    stroke-dashoffset: -1000;
+  }
+}
+
+@keyframes pulse-ring {
+  0% {
+    opacity: 0.55;
+    transform: scale(0.9);
+  }
+  70% {
+    opacity: 0;
+    transform: scale(1.6);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1.6);
+  }
+}

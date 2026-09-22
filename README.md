@@ -4,22 +4,7 @@ An AI-powered melanoma diagnosis system that classifies dermoscopic skin lesion 
 
 ## Architecture
 
-```
-Dermoscopic Image → Validation → Preprocessing
-                                      │
-                        ┌──────────────┴──────────────┐
-                        ▼                             ▼
-                Swin Transformer V2              SegFormer
-                (Classification)              (Segmentation)
-                        │                             │
-                        └──────────────┬──────────────┘
-                                       ▼
-                             ABC Feature Extraction
-                                       ▼
-                            Core Diagnosis Engine
-                                       ▼
-                              DiagnosisResult
-```
+<img width="1536" height="1024" alt="Architecture" src="https://github.com/user-attachments/assets/76787992-de9d-4d51-a7e7-6cab9008c991" />
 
 ## Setup
 

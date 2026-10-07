@@ -94,6 +94,14 @@ export default function Results({ analysisResult, onNavigate }) {
   const confidence = Math.round(diagnosis?.diagnosis?.confidence || 0);
   const melanomaProb = Number(diagnosis?.melanoma_probability ?? diagnosis?.probabilities?.melanoma ?? 0);
 
+  // Log fusion information specifically requested
+  if (diagnosis?.diagnosis?.fusion_weights || diagnosis?.diagnosis?.fusion_score) {
+    console.log("=== Fusion Model Classification Details ===");
+    console.log("Composite Melanoma Score:", diagnosis.diagnosis.fusion_score);
+    console.log("Effective Weights for Classification:", diagnosis.diagnosis.fusion_weights);
+    console.log("=========================================");
+  }
+
   let riskAssessment = 'Low Risk';
   let riskBadgeClass = 'badge-low';
   let riskSummaryText = 'The features analyzed align with typical benign dermatological characteristics. Continue normal routine self-checks.';

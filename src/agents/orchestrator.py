@@ -60,6 +60,10 @@ class OrchestratorAgent:
                     )
                     state.fusion_result = fusion
                     state.diagnosis_result.diagnosis.prediction = fusion.prediction
+                    if fusion.prediction.lower() == "melanoma":
+                        state.diagnosis_result.diagnosis.confidence = float(fusion.composite_score * 100.0)
+                    else:
+                        state.diagnosis_result.diagnosis.confidence = float((1.0 - fusion.composite_score) * 100.0)
                     state.classification["prediction"] = fusion.prediction
                     state.classification["fusion_score"] = fusion.composite_score
                     state.classification["fusion_weights"] = fusion.weights_used

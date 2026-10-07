@@ -67,3 +67,6 @@ git_diff_output.txt
 tests/
 # ── Windows system files ──────────────────────────────────
 desktop.ini
+
+scripts
+*.json

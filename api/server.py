@@ -209,6 +209,8 @@ def _workflow_to_response(state, original_image_url: Optional[str]) -> AnalysisR
             diagnosis=DiagnosisInfoOut(
                 prediction=diag.diagnosis.prediction,
                 confidence=diag.diagnosis.confidence,
+                fusion_score=state.classification.get("fusion_score") if hasattr(state, "classification") else None,
+                fusion_weights=state.classification.get("fusion_weights") if hasattr(state, "classification") else None,
             ),
             probabilities=diag.probabilities,
             melanoma_probability=diag.probabilities.get("melanoma"),

@@ -18,6 +18,8 @@ from pydantic import BaseModel, Field
 class DiagnosisInfoOut(BaseModel):
     prediction: str
     confidence: float
+    fusion_score: Optional[float] = None
+    fusion_weights: Optional[Dict[str, float]] = None
 
 
 class FeatureScoreOut(BaseModel):

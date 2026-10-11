@@ -1,13 +1,14 @@
 # CaseState Agent Architecture
 
-`OrchestratorAgent` runs a bounded decision loop. It records public operational
-metadata (`agent`, `action`, `result`, `reason_category`, timestamp and small
-state details), never private reasoning.
+`OrchestratorAgent` runs a bounded decision loop powered by **Hybrid Guided Reasoning**:
+- **Safety Prerequisite Ordering**: Enforces foundational medical prerequisites (Image Quality → Vision & ABCD extraction → Temporal Evolution → Multimodal Fusion).
+- **Cognitive Mind (LLM Deliberation)**: Uses Google Gemini to dynamically analyze clinical findings, identify diagnostic uncertainties, formulate targeted RAG literature queries, and evaluate evidence sufficiency and stop criteria.
+- **Execution Trace**: Records both operational actions and clinical agent thoughts in the execution trace for full transparency.
 
 ```text
-observe CaseState -> choose action -> invoke one tool/agent -> update CaseState
-                     ^                                           |
-                     +-------------------------------------------+
+observe CaseState -> LLM Cognitive Deliberation -> invoke subagent -> update CaseState
+                     ^                                                   |
+                     +---------------------------------------------------+
 ```
 
 ## Top-Level Agents
@@ -30,29 +31,23 @@ Orchestrator Agent
     │     └── Measurement / ABCD extraction
     │
     ├── Evidence Agent
-    │     └── Hybrid RAG
-    │           ├── BGE
-    │           ├── Qdrant
-    │           ├── BM25
-    │           └── HyDE
+    │     ├── Hybrid RAG (BGE + Qdrant + BM25 + HyDE)
+    │     └── Clinical Context & Evolution Evidence
     │
     └── Report Agent
 ```
 
-## Clinical Context Handling
+## Evidence Agent & Clinical Context Handling
 
-Clinical context (evolution history, patient-reported symptoms) is managed
-as an **internal utility** of the Orchestrator workflow, not a separate
-top-level agent. The `clinical_context` module normalises supplied history,
-populates the ABCDE "E" feature, and emits missing-information questions.
-It never fabricates patient history from image data.
-
-## Evidence Agent
-
-The Evidence Agent is the sole retrieval entry point. Its backend is
-`rag_pipeline.agent.AdvancedRetrievalBackend`; it retains hybrid dense/BM25
-retrieval, RRF, parent expansion, cross-encoder reranking, and HyDE query
-support. The old simple BGE/Qdrant retriever was removed.
+There is no separate top-level agent named "Clinical Context Agent"; clinical
+context handling is an internal component of the **Evidence Agent**.
+The Evidence Agent is the sole evidence entry point, combining:
+1. **Medical Literature Retrieval**: `rag_pipeline.agent.AdvancedRetrievalBackend`
+   retaining hybrid dense/BM25 retrieval, RRF, parent expansion, cross-encoder
+   reranking, and HyDE query support.
+2. **Clinical Context & Evolution**: Normalizes patient history, assesses
+   temporal lesion evolution across image visits for the E criterion, and emits
+   missing-information questions without fabricating history from image data.
 
 ## Measurement Safety
 

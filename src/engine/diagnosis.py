@@ -40,6 +40,7 @@ class ExplainabilityInfo(BaseModel):
     attention_outside_lesion: Optional[float] = None   # AOL: 1 - AIL
     centroid_distance: Optional[float] = None          # normalized distance between GradCAM and mask centroids
     mask_cam_iou: Optional[float] = None               # IoU between thresholded GradCAM and mask
+    grad_cam_path: Optional[str] = None              # Path to stored Grad-CAM visual
 
 
 class PreprocessingInfo(BaseModel):
@@ -108,6 +109,7 @@ class DiagnosisResult(BaseModel):
     clinical_interpretations: Dict[str, str] = Field(default_factory=dict)
     segmentation: SegmentationInfo
     explainability: ExplainabilityInfo = Field(default_factory=ExplainabilityInfo)
+    grad_cam_path: Optional[str] = None
     preprocessing: PreprocessingInfo = Field(default_factory=PreprocessingInfo)
     scale_calibration: Optional[ScaleCalibrationInfo] = None
     pipeline: PipelineInfo = Field(default_factory=PipelineInfo)

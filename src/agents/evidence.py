@@ -1,11 +1,29 @@
-"""Evidence Agent backed exclusively by the advanced hybrid RAG components."""
+"""Evidence Agent: coordinates hybrid RAG retrieval and clinical context/evolution evidence."""
 from __future__ import annotations
-from typing import Any, Dict, Iterable, List
+from typing import Any, Dict, Iterable, List, Optional
 from .state import CaseState, EvidenceAssessment, EvidenceRecord
 
 class EvidenceAgent:
     name = "evidence"
-    def __init__(self, max_cycles: int = 3, backend: Any = None): self.max_cycles, self._backend = max_cycles, backend
+    def __init__(self, max_cycles: int = 3, backend: Any = None, clinical_context: Any = None):
+        self.max_cycles = max_cycles
+        self._backend = backend
+        from .clinical_context import ClinicalContextHandler
+        self.clinical_context = clinical_context or ClinicalContextHandler()
+
+    def update_clinical_context(self, state: CaseState, supplied: Dict[str, Any] | None = None) -> CaseState:
+        """Collect and normalize patient clinical context as evidence (e.g. reported evolution, duration, symptoms)."""
+        return self.clinical_context.update(state, supplied)
+
+    def assess_evolution(
+        self,
+        image_paths: List[str],
+        timestamps: List[str] | None = None,
+        config: Dict[str, Any] | None = None,
+    ) -> Dict[str, Any]:
+        """Assess temporal lesion change across visits as clinical evolution evidence."""
+        return self.clinical_context.assess_evolution(image_paths, timestamps, config)
+
     def _backend_instance(self):
         if self._backend is None:
             from rag_pipeline.agent import create_backend
@@ -14,6 +32,21 @@ class EvidenceAgent:
     def retrieve_evidence(self, state: CaseState, evidence_goal: str) -> CaseState:
         try:
             backend = self._backend_instance()
+            queries, accumulated, assessment = self._plan_queries(state, evidence_goal, backend), list(state.evidence), EvidenceAssessment()
+            for cycle in range(1, self.max_cycles + 1):
+                cycle_queries = queries if cycle == 1 else assessment.follow_up_queries
+                if not cycle_queries: break
+                documents = []
+                for query in cycle_queries: documents.extend(backend.hybrid_search(query))
+                accumulated = self._deduplicate(accumulated, documents, evidence_goal, cycle)
+                assessment = self._evaluate(state, accumulated, evidence_goal, cycle)
+                state.record(self.name, "retrieve_evidence", "sufficient" if assessment.sufficient else "follow_up_required", "evidence_gap", {"cycle": cycle, "goal": evidence_goal, "missing": assessment.missing}, tool=True)
+                if assessment.sufficient: break
+            state.evidence = state.retrieved_evidence = accumulated
+            state.evidence_assessment = assessment
+            state.uncertainty.retrieval = 1.0 if accumulated else 0.0
+            state.uncertainty.evidence_sufficiency = 1.0 if assessment.sufficient else 0.35
+            return state
         except Exception as e:
             state.record(self.name, "retrieve_evidence", "skipped", "backend_unavailable", {"error": str(e)}, tool=True)
             state.evidence = state.retrieved_evidence = []
@@ -21,27 +54,16 @@ class EvidenceAgent:
             state.uncertainty.retrieval = 0.0
             state.uncertainty.evidence_sufficiency = 0.0
             return state
-
-        queries, accumulated, assessment = self._plan_queries(state, evidence_goal, backend), list(state.evidence), EvidenceAssessment()
-        for cycle in range(1, self.max_cycles + 1):
-            cycle_queries = queries if cycle == 1 else assessment.follow_up_queries
-            if not cycle_queries: break
-            documents = []
-            for query in cycle_queries: documents.extend(backend.hybrid_search(query))
-            accumulated = self._deduplicate(accumulated, documents, evidence_goal, cycle)
-            assessment = self._evaluate(state, accumulated, evidence_goal, cycle)
-            state.record(self.name, "retrieve_evidence", "sufficient" if assessment.sufficient else "follow_up_required", "evidence_gap", {"cycle": cycle, "goal": evidence_goal, "missing": assessment.missing}, tool=True)
-            if assessment.sufficient: break
-        state.evidence = state.retrieved_evidence = accumulated
-        state.evidence_assessment = assessment
-        state.uncertainty.retrieval = 1.0 if accumulated else 0.0
-        state.uncertainty.evidence_sufficiency = 1.0 if assessment.sufficient else 0.35
-        return state
     def _plan_queries(self, state: CaseState, goal: str, backend: Any = None) -> List[str]:
         queries = ["ABCDE clinical guideline evidence for suspicious pigmented lesions"]
-        if goal == "differential" or state.uncertainty.classification < 0.70: queries.append("differential diagnosis of uncertain pigmented skin lesion dermoscopy")
-        if goal in {"ABCDE", "measurement", "clinical_guidelines"}: queries.extend(["melanoma asymmetry irregular border color variation evidence", "melanoma diameter criterion evidence calibrated measurement"])
-        if state.abcde.get("E") and state.abcde["E"].availability == "unavailable": queries.append("clinical importance of evolution history in ABCDE melanoma assessment")
+        if goal and goal not in {"ABCDE", "differential", "measurement", "clinical_guidelines"}:
+            queries.insert(0, goal)
+        elif goal == "differential" or state.uncertainty.classification < 0.70:
+            queries.append("differential diagnosis of uncertain pigmented skin lesion dermoscopy")
+        if goal in {"ABCDE", "measurement", "clinical_guidelines"}:
+            queries.extend(["melanoma asymmetry irregular border color variation evidence", "melanoma diameter criterion evidence calibrated measurement"])
+        if state.abcde.get("E") and state.abcde["E"].availability == "unavailable":
+            queries.append("clinical importance of evolution history in ABCDE melanoma assessment")
         # Preserve the advanced backend's HyDE implementation. Its input uses
         # only typed observations: a pixel diameter remains a pixel diameter,
         # and diameter_mm is absent unless CaseState validates calibration.
@@ -64,7 +86,7 @@ class EvidenceAgent:
                 pass
         return list(dict.fromkeys(queries))
     def _evaluate(self, state: CaseState, evidence: List[EvidenceRecord], goal: str, cycle: int) -> EvidenceAssessment:
-        required = ["A", "B", "C", "D", "E"] if goal == "ABCDE" else [goal]
+        required = ["A", "B", "C", "D", "E"] if (goal == "ABCDE" or len(goal) > 20) else [goal]
         corpus = " ".join((item.title + " " + item.content).lower() for item in evidence)
         terms = {"A": ("asymmetr",), "B": ("border", "margin"), "C": ("color", "colour", "pigment"), "D": ("diameter", "size"), "E": ("evolution", "change", "temporal")}
         covered = [key for key in required if key not in terms or any(term in corpus for term in terms[key])]

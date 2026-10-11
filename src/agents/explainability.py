@@ -18,6 +18,7 @@ Usage:
 
 import os
 import re
+import time
 import logging
 from dataclasses import dataclass, field
 from typing import List, Dict, Any, Optional
@@ -70,9 +71,17 @@ class EvidenceGroundedExplanationService:
         self.config = config
         self.mode = config.get("mode", "template")
         self.llm_provider = config.get("llm_provider", "gemini")
-        self.model_name = config.get("model") or os.environ.get("GEMINI_MODEL", "gemini-3.6-flash")
+        self.model_name = config.get("model") or os.environ.get("GEMINI_MODEL", "gemini-3.8-flash")
+        self.fallback_model = config.get("fallback_model") or os.environ.get("GEMINI_FALLBACK_MODEL", "gemini-3.1-flash-lite")
+        self.max_retries = int(config.get("max_retries", 5))
+        self.retry_delay = float(config.get("retry_delay", 3.0))
+        self.fallback_after_retries = int(config.get("fallback_after_retries", 3))
         self.ail_threshold = config.get("gradcam_ail_threshold", 0.30)
         self._gemini_model = None
+        logger.info(
+            "EvidenceGroundedExplanationService mode=%s model=%s fallback=%s max_retries=%d retry_delay=%.1fs",
+            self.mode, self.model_name, self.fallback_model, self.max_retries, self.retry_delay
+        )
 
     def explain(
         self,
@@ -108,6 +117,15 @@ class EvidenceGroundedExplanationService:
             return self._gemini_model
 
         api_key = os.environ.get("GEMINI_API_KEY")
+        if not api_key:
+            try:
+                from dotenv import load_dotenv
+                load_dotenv()
+                api_key = os.environ.get("GEMINI_API_KEY")
+            except Exception:
+                pass
+        if api_key:
+            api_key = api_key.strip().strip('"').strip("'")
         if not api_key:
             raise RuntimeError(
                 "GEMINI_API_KEY environment variable not set. "
@@ -179,12 +197,13 @@ class EvidenceGroundedExplanationService:
                 f"      {content[:250]}"
             )
 
+        probs = getattr(diag, "probabilities", {}) or {}
         prompt = f"""You are an AI dermatology assistant analyzing the output of an automated melanoma diagnostic pipeline. Generate a clinical explanation of the following diagnosis result.
 
 ## DIAGNOSTIC DATA
 
 **Classification Result:** {prediction} ({confidence:.1f}% confidence)
-**Probabilities:** melanoma={diag.probabilities.get('melanoma', 0):.4f}, benign={diag.probabilities.get('non_melanoma', diag.probabilities.get('not_melanoma', 0)):.4f}
+**Probabilities:** melanoma={probs.get('melanoma', 0):.4f}, benign={probs.get('non_melanoma', probs.get('not_melanoma', 0)):.4f}
 
 **Clinical Features (ABCD Rule):**
 {chr(10).join(feature_lines)}
@@ -349,33 +368,99 @@ IMPORTANT GUIDELINES:
         diagnosis_result,
         evidence: List[Any],
     ) -> ExplanationResult:
-        """Generate an LLM-powered clinical explanation via Google Gemini."""
+        """Generate an LLM-powered clinical explanation via Google Gemini with retry and fallback model."""
         logger.info("Phase 3: Generating LLM explanation via Gemini...")
 
+        client = None
         try:
             client = self._get_gemini_model()
-            prompt = self._build_clinical_prompt(diagnosis_result, evidence)
-
-            chat = client.chats.create(model=self.model_name)
-            response = chat.send_message(prompt)
-
-            response_text = response.text
-            logger.info(f"Gemini response received ({len(response_text)} chars)")
-
-            result = self._parse_llm_response(
-                response_text, diagnosis_result, evidence
-            )
-            return result
-
         except Exception as e:
             logger.warning(
-                f"LLM explanation failed: {e}. "
+                f"Failed to initialize Gemini client: {e}. "
                 f"Falling back to template mode."
             )
-            # Graceful fallback to template mode
             result = self._template_explain(diagnosis_result, evidence)
             result.flags.append("llm_fallback_to_template")
+            result.flags.append(f"llm_client_init_failed:{type(e).__name__}")
             return result
+
+        prompt = self._build_clinical_prompt(diagnosis_result, evidence)
+        last_error = None
+
+        for attempt in range(1, self.max_retries + 1):
+            use_fallback = attempt > self.fallback_after_retries
+            current_model = self.fallback_model if use_fallback else self.model_name
+
+            try:
+                logger.info(
+                    "Generating Gemini explanation (attempt %d/%d, model=%s)...",
+                    attempt,
+                    self.max_retries,
+                    current_model,
+                )
+                chat = client.chats.create(model=current_model)
+                response = chat.send_message(prompt)
+
+                response_text = getattr(response, "text", None) or ""
+                if not response_text.strip():
+                    raise ValueError(f"Empty response received from Gemini model {current_model}")
+
+                logger.info(
+                    "Gemini response received on attempt %d with %s (%d chars)",
+                    attempt,
+                    current_model,
+                    len(response_text),
+                )
+                result = self._parse_llm_response(
+                    response_text, diagnosis_result, evidence
+                )
+                if use_fallback:
+                    result.flags.append(f"llm_model_fallback:{current_model}")
+                if attempt > 1:
+                    result.flags.append(f"llm_retry_success:attempt_{attempt}")
+                return result
+
+            except Exception as e:
+                last_error = e
+                if attempt < self.max_retries:
+                    next_is_fallback = (attempt + 1) > self.fallback_after_retries
+                    next_model = self.fallback_model if next_is_fallback else self.model_name
+                    if next_is_fallback and not use_fallback:
+                        logger.warning(
+                            "LLM explanation attempt %d/%d with model '%s' failed: %s. "
+                            "Switching to fallback model '%s' after %d retries in %.1fs...",
+                            attempt,
+                            self.max_retries,
+                            current_model,
+                            e,
+                            next_model,
+                            self.fallback_after_retries,
+                            self.retry_delay,
+                        )
+                    else:
+                        logger.warning(
+                            "LLM explanation attempt %d/%d with model '%s' failed: %s. "
+                            "Retrying in %.1fs...",
+                            attempt,
+                            self.max_retries,
+                            current_model,
+                            e,
+                            self.retry_delay,
+                        )
+                    time.sleep(self.retry_delay)
+                else:
+                    logger.error(
+                        "All %d LLM explanation attempts failed (last error: %s). "
+                        "Falling back to deterministic template mode.",
+                        self.max_retries,
+                        e,
+                    )
+
+        # Graceful fallback to template mode after all retries exhausted
+        result = self._template_explain(diagnosis_result, evidence)
+        result.flags.append("llm_fallback_to_template")
+        result.flags.append(f"llm_retries_exhausted:{type(last_error).__name__}")
+        return result
 
     # ==================================================================
     # Template Mode — Deterministic (no LLM)
@@ -392,9 +477,10 @@ IMPORTANT GUIDELINES:
         confidence = diag.diagnosis.confidence
         is_melanoma = prediction == "Melanoma"
 
-        melanoma_probability = float(diag.probabilities.get("melanoma", 0.0))
+        probs = getattr(diag, "probabilities", {}) or {}
+        melanoma_probability = float(probs.get("melanoma", 0.0))
         non_melanoma_probability = float(
-            diag.probabilities.get("not_melanoma", diag.probabilities.get("non_melanoma", 0.0))
+            probs.get("not_melanoma", probs.get("non_melanoma", 0.0))
         )
         feature_text = []
         for name, feature in diag.clinical_features.items():

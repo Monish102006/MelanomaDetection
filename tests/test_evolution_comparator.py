@@ -6,7 +6,7 @@ import unittest
 import cv2
 import numpy as np
 
-from evolution_comparator import EvolutionComparator
+from rag_pipeline.evolution_comparator import EvolutionComparator
 
 
 def visit(radius: int, colour: tuple[int, int, int]):

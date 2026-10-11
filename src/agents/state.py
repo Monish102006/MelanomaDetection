@@ -85,6 +85,7 @@ class CaseState:
     classification: Dict[str, Any] = field(default_factory=dict)
     segmentation: Dict[str, Any] = field(default_factory=dict)
     gradcam: Dict[str, Any] = field(default_factory=dict)
+    grad_cam_saved_path: Optional[str] = None
     pixel_measurements: Dict[str, Measurement] = field(default_factory=dict)
     physical_measurements: Dict[str, Measurement] = field(default_factory=dict)
     calibration: Dict[str, Any] = field(default_factory=dict)

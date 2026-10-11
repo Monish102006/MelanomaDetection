@@ -9,12 +9,15 @@ outputs into a standardized DiagnosisResult.
 Downstream Phase 2 agents interact ONLY with this engine.
 """
 
+import logging
 from pathlib import Path
 
 import yaml
 import torch
 import numpy as np
 import cv2
+
+logger = logging.getLogger(__name__)
 
 from .diagnosis import (
     DiagnosisResult, FeatureScore, DiagnosisInfo,
@@ -201,7 +204,8 @@ class CoreDiagnosisEngine:
                     )
                 else:
                     reference_bbox = scale_cal.reference_bbox_px
-            mask = refine_lesion_mask(raw_mask, excluded_bbox=reference_bbox)
+            max_ratio = float(self.config.get("orchestrator", {}).get("segmentation_max_area_ratio", 0.90))
+            mask = refine_lesion_mask(raw_mask, max_area_ratio=max_ratio, excluded_bbox=reference_bbox)
         except ValueError as exc:
             raise RuntimeError("segmentation_failed") from exc
         components_before_cleanup = int(cv2.connectedComponents((mask > 0).astype(np.uint8))[0] - 1)
@@ -392,12 +396,25 @@ class CoreDiagnosisEngine:
         # dominant avoidable CPU cost on machines without CUDA.  It is
         # optional because diagnosis, segmentation, calibration, and the
         # report remain valid without it.
+        grad_cam_path = None
         if self.config.get("explainability", {}).get("compute_gradcam", False):
             try:
                 cam_result = self.gradcam.generate_from_array(raw["preprocessed_image"])
                 cam_metrics = SwinGradCAM.compute_metrics(cam_result["heatmap"], mask)
+                gradcam_dir = (
+                    Path(self.config_path).parent
+                    / self.config.get("paths", {}).get("outputs", "outputs")
+                    / "gradcam_samples"
+                )
+                gradcam_dir.mkdir(parents=True, exist_ok=True)
+                sample_name = request_id or img_path.stem
+                gradcam_file = gradcam_dir / f"{sample_name}_gradcam.png"
+                self.gradcam.save_cam_visual(cam_result, gradcam_file)
+                grad_cam_path = str(gradcam_file)
+                cam_metrics["grad_cam_path"] = grad_cam_path
                 explainability = ExplainabilityInfo(**cam_metrics)
-            except Exception:
+            except Exception as e:
+                logger.warning("Grad-CAM generation or storage failed: %s", e)
                 explainability = ExplainabilityInfo()
         else:
             explainability = ExplainabilityInfo()
@@ -419,6 +436,7 @@ class CoreDiagnosisEngine:
                 perimeter_px=perimeter_px
             ),
             explainability=explainability,
+            grad_cam_path=grad_cam_path,
             preprocessing=PreprocessingInfo(**raw["preprocessing_applied"]),
             scale_calibration=scale_calibration_info,
             pipeline=PipelineInfo(classification_threshold=cls.get("classification_threshold")),

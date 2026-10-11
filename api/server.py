@@ -6,11 +6,13 @@ import logging
 import os
 import threading
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Optional
 
 import numpy as np
+
+
 import yaml
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile, Request, Depends
 from fastapi.exceptions import RequestValidationError
@@ -144,7 +146,7 @@ def _configured_model_paths() -> tuple[Path, Path]:
     )
     segmentation_path = _resolve_project_path(
         config.get("segmentation", {}).get("checkpoint"),
-        checkpoints_dir / "segformer_best.pt",
+        checkpoints_dir / "best_segformer_melanoma.pth",
     )
     return classification_path, segmentation_path
 
@@ -428,17 +430,76 @@ async def list_analyses(current_user: dict = Depends(get_current_user)):
     user_id = str(current_user.get("id") or current_user.get("_id", ""))
     if db is not None:
         try:
-            query = {"diagnosis": {"$exists": True}, "user_id": user_id}
-            cursor = db["analyses"].find(query).sort("diagnosis.metadata.timestamp", -1)
+            query = {"user_id": user_id}
+            cursor = db["analyses"].find(query).sort("_id", -1)
             async for doc in cursor:
                 try:
+                    diagnosis = doc.get("diagnosis") or {}
+                    if not isinstance(diagnosis, dict):
+                        diagnosis = {}
+
+                    diag_meta = diagnosis.get("metadata") or {}
+                    if not isinstance(diag_meta, dict):
+                        diag_meta = {}
+
+                    diag_info = diagnosis.get("diagnosis") or {}
+                    if not isinstance(diag_info, dict):
+                        diag_info = {}
+
+                    status = str(doc.get("status") or "completed")
+
+                    orig_url = doc.get("original_image_url") or ""
+                    image_name = (
+                        diag_meta.get("image_id")
+                        or (Path(orig_url).name if orig_url else None)
+                        or doc.get("analysis_id", "Unknown")
+                    )
+
+                    if diag_info.get("prediction"):
+                        prediction = str(diag_info["prediction"])
+                    elif status in ("failed", "error"):
+                        prediction = "Analysis Failed"
+                    elif status == "image_quality_insufficient":
+                        prediction = "Quality Insufficient"
+                    elif status == "segmentation_failed":
+                        prediction = "Segmentation Failed"
+                    else:
+                        prediction = status.replace("_", " ").title() if status else "Unknown"
+
+                    raw_conf = diag_info.get("confidence", 0.0)
+                    try:
+                        confidence = float(raw_conf) if raw_conf is not None else 0.0
+                    except (ValueError, TypeError):
+                        confidence = 0.0
+
+                    raw_ts = diag_meta.get("timestamp")
+                    if not raw_ts and doc.get("execution_trace"):
+                        traces = doc.get("execution_trace")
+                        if isinstance(traces, list) and traces and isinstance(traces[0], dict):
+                            raw_ts = traces[0].get("timestamp")
+
+                    ts = None
+                    if isinstance(raw_ts, str):
+                        try:
+                            ts = datetime.fromisoformat(raw_ts)
+                        except Exception:
+                            pass
+                    elif isinstance(raw_ts, datetime):
+                        ts = raw_ts
+
+                    if ts is None:
+                        if "_id" in doc and hasattr(doc["_id"], "generation_time"):
+                            ts = doc["_id"].generation_time
+                        else:
+                            ts = datetime.now(timezone.utc)
+
                     items.append(AnalysisListItem(
                         analysis_id=doc["analysis_id"],
-                        image_name=doc.get("diagnosis", {}).get("metadata", {}).get("image_id") or doc["analysis_id"],
-                        prediction=doc.get("diagnosis", {}).get("diagnosis", {}).get("prediction", "Unknown"),
-                        confidence=doc.get("diagnosis", {}).get("diagnosis", {}).get("confidence", 0.0),
-                        timestamp=doc.get("diagnosis", {}).get("metadata", {}).get("timestamp", datetime.now()),
-                        status=doc.get("status", "completed"),
+                        image_name=image_name,
+                        prediction=prediction,
+                        confidence=confidence,
+                        timestamp=ts,
+                        status=status,
                     ))
                 except Exception as e:
                     logger.warning(f"Skipping document {doc.get('analysis_id')} due to parse error: {e}")
@@ -448,14 +509,47 @@ async def list_analyses(current_user: dict = Depends(get_current_user)):
             # Fall back to in-memory store
 
     for analysis in analyses_store.values():
-        if analysis.diagnosis and getattr(analysis, 'user_id', None) == user_id:
+        if getattr(analysis, "user_id", None) == user_id:
+            diag = analysis.diagnosis
+            diag_meta = getattr(diag, "metadata", None) if diag else None
+            diag_info = getattr(diag, "diagnosis", None) if diag else None
+            status = getattr(analysis, "status", "completed") or "completed"
+
+            orig_url = getattr(analysis, "original_image_url", "") or ""
+            image_name = (
+                (getattr(diag_meta, "image_id", None) if diag_meta else None)
+                or (Path(orig_url).name if orig_url else None)
+                or analysis.analysis_id
+            )
+
+            if diag_info and getattr(diag_info, "prediction", None):
+                prediction = str(diag_info.prediction)
+            elif status in ("failed", "error"):
+                prediction = "Analysis Failed"
+            elif status == "image_quality_insufficient":
+                prediction = "Quality Insufficient"
+            elif status == "segmentation_failed":
+                prediction = "Segmentation Failed"
+            else:
+                prediction = status.replace("_", " ").title() if status else "Unknown"
+
+            raw_conf = getattr(diag_info, "confidence", 0.0) if diag_info else 0.0
+            try:
+                confidence = float(raw_conf) if raw_conf is not None else 0.0
+            except (ValueError, TypeError):
+                confidence = 0.0
+
+            ts = getattr(diag_meta, "timestamp", None) if diag_meta else None
+            if not ts:
+                ts = datetime.now(timezone.utc)
+
             items.append(AnalysisListItem(
                 analysis_id=analysis.analysis_id,
-                image_name=analysis.diagnosis.metadata.image_id or analysis.analysis_id,
-                prediction=analysis.diagnosis.diagnosis.prediction,
-                confidence=analysis.diagnosis.diagnosis.confidence,
-                timestamp=analysis.diagnosis.metadata.timestamp,
-                status=analysis.status,
+                image_name=image_name,
+                prediction=prediction,
+                confidence=confidence,
+                timestamp=ts,
+                status=status,
             ))
     return sorted(items, key=lambda item: item.timestamp, reverse=True)
 
@@ -617,7 +711,6 @@ async def analyze_image(
         with Image.open(io.BytesIO(contents)) as candidate:
             image = candidate.convert("RGB")
             image.save(file_path, format="PNG", optimize=True)
-            image_array = np.asarray(image, dtype=np.uint8)
     except (UnidentifiedImageError, OSError, ValueError):
         file_path.unlink(missing_ok=True)
         raise HTTPException(status_code=400, detail={
@@ -651,30 +744,6 @@ async def analyze_image(
         except Exception as e:
             logger.warning(f"Failed to parse historical_analysis_ids: {e}")
 
-    # Reject images that are technically unusable before the expensive pipeline.
-    # This catches blank, overexposed, extremely blurry, wrong-resolution, or
-    # non-dermoscopic uploads early, returning a clear actionable status.
-    from src.engine.image_quality import check_image_quality
-    quality = check_image_quality(image_array, **_config().get("quality", {}))
-    if not quality.accepted:
-        file_path.unlink(missing_ok=True)
-        now = datetime.now()
-        analysis = AnalysisResponse(
-            analysis_id=analysis_id,
-            status="image_quality_insufficient",
-            phases=[
-                PhaseStatus(phase=1, name="Diagnosis", status="failed", started_at=now, completed_at=now, error=quality.reason),
-                PhaseStatus(phase=2, name="Medical Evidence", status="skipped"),
-                PhaseStatus(phase=3, name="Explanation", status="skipped"),
-                PhaseStatus(phase=4, name="Report Generation", status="skipped"),
-            ],
-            error_code="image_quality_insufficient",
-            message=quality.reason,
-            retryable=True,
-            flags=quality.warnings,
-        )
-        await _save_analysis(analysis, user_id=_caller_user_id)
-        return analysis
 
     if not _models_available():
         file_path.unlink(missing_ok=True)
@@ -695,7 +764,7 @@ async def analyze_image(
             _get_supervisor().run,
             str(file_path),
             analysis_id=analysis_id,
-            save_mask=True,
+            save_mask=False,
             scale_method=scale_method,
             scale_reference_mm=scale_reference_mm,
             scale_reference_key=scale_reference_key,

@@ -245,19 +245,19 @@ class AdvancedRetrievalBackend:
             k = settings.RERANK_TOP_K
 
         # --- Dense search ---
-        with self.metrics.track("dense_search", query_len=len(query)):
-            dense_results_raw = _vector_store.similarity_search_with_score(
-                query,
-                k=settings.DENSE_RETRIEVE_K
-            )
-
         dense_results = []
-        for doc, score in dense_results_raw:
-            dense_results.append({
-                "text": doc.page_content,
-                "metadata": doc.metadata,
-                "dense_score": float(score)
-            })
+        if _vector_store is not None:
+            with self.metrics.track("dense_search", query_len=len(query)):
+                dense_results_raw = _vector_store.similarity_search_with_score(
+                    query,
+                    k=settings.DENSE_RETRIEVE_K
+                )
+            for doc, score in dense_results_raw:
+                dense_results.append({
+                    "text": doc.page_content,
+                    "metadata": doc.metadata,
+                    "dense_score": float(score)
+                })
 
         # --- BM25 search ---
         if _bm25_available:

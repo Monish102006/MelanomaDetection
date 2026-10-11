@@ -75,14 +75,10 @@ def main():
             sys.exit(1)
         from src.engine.engine import CoreDiagnosisEngine
         engine = CoreDiagnosisEngine("config.yaml")
-        result = engine.diagnose(sys.argv[2], save_mask=True)
+        result = engine.diagnose(sys.argv[2], save_mask=False)
         print(result.to_summary())
-        # Save as JSON
-        output_path = Path("outputs") / f"{Path(sys.argv[2]).stem}_diagnosis.json"
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(output_path, "w") as f:
-            f.write(result.model_dump_json(indent=2))
-        print(f"\nFull result saved to: {output_path}")
+        if result.grad_cam_path:
+            print(f"\n  Grad-CAM Visual saved: {result.grad_cam_path}")
 
     elif command == "orchestrate":
         if len(sys.argv) < 3:
@@ -105,7 +101,7 @@ def main():
         print(f"{'='*60}\n")
 
         supervisor = OrchestratorAgent("config.yaml")
-        state = supervisor.run(image_path, save_mask=True)
+        state = supervisor.run(image_path, save_mask=False)
 
         # Print results summary
         print(f"\n{'='*60}")
@@ -121,6 +117,9 @@ def main():
             for name, feat in diag.clinical_features.items():
                 print(f"    {name}: {feat.score_label} ({feat.score_numeric:.3f})")
 
+        if state.grad_cam_saved_path:
+            print(f"\n  Grad-CAM Visual saved: {state.grad_cam_saved_path}")
+
         if state.retrieved_evidence:
             print(f"\n  Evidence: {len(state.retrieved_evidence)} items retrieved")
             for ev in state.retrieved_evidence[:3]:
@@ -128,7 +127,8 @@ def main():
 
         if state.explanation_result:
             expl = state.explanation_result
-            print(f"\n  Explanation: {expl.get('model_observation', 'unavailable')}")
+            summary = expl.summary if hasattr(expl, "summary") else str(expl)
+            print(f"\n  Explanation: {summary}")
 
         if state.report_result:
             print(f"\n  Report PDF: {state.report_result.pdf_path or 'not generated'}")
@@ -137,15 +137,6 @@ def main():
             print(f"\n  ⚠ Flags:")
             for flag in state.flags:
                 print(f"    • {flag}")
-
-        # Save orchestrator result as JSON
-        if state.report_result and state.report_result.dashboard_payload:
-            import json
-            output_path = Path("outputs") / f"{state.analysis_id}_orchestrator.json"
-            output_path.parent.mkdir(parents=True, exist_ok=True)
-            with open(output_path, "w") as f:
-                json.dump(state.report_result.dashboard_payload, f, indent=2, default=str)
-            print(f"\n  Dashboard payload saved: {output_path}")
 
         print()
 
@@ -237,7 +228,7 @@ def main():
 
         # Compatibility command: it now invokes the same supervisor route.
         from src.agents.orchestrator import OrchestratorAgent
-        state = OrchestratorAgent("config.yaml").run(image_path)
+        state = OrchestratorAgent("config.yaml").run(image_path, save_mask=False)
         report = state.final_report or {"status": state.status, "flags": state.flags}
 
         # Display
@@ -245,13 +236,6 @@ def main():
         print("ABCDE CASE REPORT")
         print(f"{'='*60}")
         print(json.dumps(report, indent=2, default=str))
-
-        # Save
-        output_path = Path("outputs") / f"{Path(image_path).stem}_case_report.json"
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(output_path, "w") as f:
-            json.dump(report, f, indent=2, default=str)
-        print(f"\nReport saved to: {output_path}")
 
     else:
         print(f"Unknown command: {command}")

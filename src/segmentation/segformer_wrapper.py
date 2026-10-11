@@ -6,11 +6,16 @@ Wraps the pretrained SegFormer model for lesion segmentation on
 2D dermoscopic images. Does not require a bounding box prompt.
 """
 
-import numpy as np
-import torch
+import logging
+import re
 import cv2
-from skimage import transform as sk_transform
+import numpy as np
 import segmentation_models_pytorch as smp
+import torch
+from skimage import transform as sk_transform
+
+logger = logging.getLogger(__name__)
+
 
 class SegFormerSegmenter:
     """
@@ -20,9 +25,9 @@ class SegFormerSegmenter:
     segmentation masks given an input image.
 
     Args:
-        checkpoint_path: Path to the .pt checkpoint.
+        checkpoint_path: Path to the .pth or .pt checkpoint.
         device: Torch device (auto-detected if None).
-        encoder_name: Encoder name (e.g. "mit_b2").
+        encoder_name: Encoder name (e.g. "mit_b2" or "nvidia/mit-b2").
         input_size: Expected input resolution (default: 512).
         closing_kernel: Morphological closing kernel size for post-processing.
     """
@@ -43,29 +48,101 @@ class SegFormerSegmenter:
         self.last_probability_map = None
         self.last_used_recovery = False
 
-        # Load SegFormer model
+        # Load weights
+        ckpt = torch.load(checkpoint_path, map_location="cpu")
+        state_dict = (
+            ckpt["model_state_dict"]
+            if isinstance(ckpt, dict) and "model_state_dict" in ckpt
+            else (ckpt["model"] if isinstance(ckpt, dict) and "model" in ckpt else ckpt)
+        )
+
+        # Respect training resolution if present in checkpoint and default input_size passed
+        if isinstance(ckpt, dict) and "image_size" in ckpt and input_size == 512:
+            self.input_size = int(ckpt["image_size"])
+
+        # Detect whether checkpoint is HuggingFace SegFormer or SMP SegFormer
+        has_stages = any("segformer.stages" in k for k in state_dict.keys())
+        has_encoder = any("segformer.encoder" in k for k in state_dict.keys())
+        has_hf_decode = any("decode_head" in k for k in state_dict.keys())
+
+        if has_stages or has_encoder or has_hf_decode:
+            self._init_hf_model(ckpt, state_dict, encoder_name)
+        else:
+            self._init_smp_model(state_dict, encoder_name)
+
+    def _init_hf_model(self, ckpt, state_dict: dict, encoder_name: str) -> None:
+        from transformers import SegformerConfig, SegformerForSemanticSegmentation
+
+        clean_sd = {}
+        for k, v in state_dict.items():
+            new_k = k
+            new_k = new_k.replace("decode_head.linear_projections.", "decode_head.linear_c.")
+            m = re.match(r"segformer\.stages\.(\d+)\.patch_embeddings\.(.*)", new_k)
+            if m:
+                new_k = f"segformer.encoder.patch_embeddings.{m.group(1)}.{m.group(2)}"
+            m = re.match(r"segformer\.stages\.(\d+)\.layer_norm\.(.*)", new_k)
+            if m:
+                new_k = f"segformer.encoder.layer_norm.{m.group(1)}.{m.group(2)}"
+            m = re.match(r"segformer\.stages\.(\d+)\.blocks\.(\d+)\.(.*)", new_k)
+            if m:
+                s, b, r = m.groups()
+                r = r.replace("layernorm_before", "layer_norm_1").replace("layernorm_after", "layer_norm_2")
+                r = r.replace("attention.q_proj", "attention.self.query").replace("attention.k_proj", "attention.self.key")
+                r = r.replace("attention.v_proj", "attention.self.value").replace("attention.o_proj", "attention.output.dense")
+                r = r.replace("attention.sequence_reduction.sequence_reduction", "attention.self.sr")
+                r = r.replace("attention.sequence_reduction.layer_norm", "attention.self.layer_norm")
+                r = r.replace("mlp.fc1", "mlp.dense1").replace("mlp.fc2", "mlp.dense2")
+                new_k = f"segformer.encoder.block.{s}.{b}.{r}"
+            clean_sd[new_k] = v
+
+        num_labels = 2
+        for k in clean_sd:
+            if "classifier.weight" in k:
+                num_labels = clean_sd[k].shape[0]
+                break
+
+        model_name = (
+            ckpt.get("model_name", encoder_name)
+            if isinstance(ckpt, dict)
+            else encoder_name
+        )
+        if not model_name.startswith("nvidia/") and "mit" in model_name:
+            model_name = "nvidia/" + model_name.replace("_", "-")
+
+        try:
+            cfg = SegformerConfig.from_pretrained(
+                model_name, num_labels=num_labels, local_files_only=True
+            )
+        except Exception:
+            try:
+                cfg = SegformerConfig.from_pretrained(model_name, num_labels=num_labels)
+            except Exception:
+                cfg = SegformerConfig(num_labels=num_labels)
+
+        self.model = SegformerForSemanticSegmentation(cfg)
+        self.model.load_state_dict(clean_sd, strict=True)
+        self.model = self.model.to(self.device)
+        self.model.eval()
+        self.is_hf = True
+
+    def _init_smp_model(self, state_dict: dict, encoder_name: str) -> None:
         self.model = smp.Segformer(
             encoder_name=encoder_name,
             encoder_weights=None,
             in_channels=3,
             classes=1,
         )
-        
-        # Load weights
-        ckpt = torch.load(checkpoint_path, map_location="cpu")
-        state_dict = ckpt["model"] if "model" in ckpt else ckpt
-        
-        # Remove "model." prefix if present
         clean_state_dict = {}
         for k, v in state_dict.items():
             if k.startswith("model."):
                 clean_state_dict[k.replace("model.", "", 1)] = v
             else:
                 clean_state_dict[k] = v
-                
+
         self.model.load_state_dict(clean_state_dict)
         self.model = self.model.to(self.device)
         self.model.eval()
+        self.is_hf = False
 
     @torch.no_grad()
     def segment(self, image: np.ndarray) -> np.ndarray:
@@ -102,11 +179,18 @@ class SegFormerSegmenter:
         )
 
         # 2. Generate mask
-        logits = self.model(img_tensor)
-        
-        # Resize logits back to original dimensions before thresholding
-        # SegFormer outputs logits at 1/4 resolution, smp automatically upsamples to input_size
-        low_res_mask = torch.sigmoid(logits[0, 0]).cpu().numpy()
+        if getattr(self, "is_hf", False):
+            outputs = self.model(img_tensor)
+            logits = outputs.logits  # (1, num_labels, H/4, W/4)
+            if logits.shape[1] > 1:
+                probs = torch.softmax(logits, dim=1)
+                low_res_mask = probs[0, 1].cpu().numpy()
+            else:
+                low_res_mask = torch.sigmoid(logits[0, 0]).cpu().numpy()
+        else:
+            logits = self.model(img_tensor)
+            # SegFormer outputs logits at 1/4 resolution, smp automatically upsamples to input_size
+            low_res_mask = torch.sigmoid(logits[0, 0]).cpu().numpy()
 
         mask_full = sk_transform.resize(
             low_res_mask, (H, W),

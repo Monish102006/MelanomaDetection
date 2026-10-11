@@ -94,13 +94,23 @@ export function AuthProvider({ children }) {
     return data;
   }, []);
 
-  const logout = useCallback(() => {
+  const logout = useCallback(async () => {
+    if (token) {
+      try {
+        await fetch(`${API_BASE}/logout`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${token}` },
+        });
+      } catch {
+        // Clear local credentials even if network call fails
+      }
+    }
     localStorage.removeItem('auth_token');
     setToken(null);
     setUser(null);
     // Push a clean state so back-button won't reveal authenticated pages
     window.history.replaceState(null, '', '/');
-  }, []);
+  }, [token]);
 
   const updateProfile = useCallback(async (updates) => {
     const res = await fetch(`${API_BASE}/me`, {

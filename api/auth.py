@@ -8,6 +8,7 @@ Uses MongoDB (Motor async) via db.py — fully unified with the rest of the app.
 
 import os
 import re
+import ssl
 import secrets
 import logging
 import smtplib
@@ -87,6 +88,12 @@ async def seed_admin():
         # TTL index: auto-delete rate-limit entries older than 1 hour
         await db["rate_limits"].create_index(
             "timestamp_dt", expireAfterSeconds=3600, background=True
+        )
+        # Session storage indexes: fast lookup and automatic TTL expiration
+        await db["sessions"].create_index("token", unique=True, background=True)
+        await db["sessions"].create_index("user_id", background=True)
+        await db["sessions"].create_index(
+            "expires_at_dt", expireAfterSeconds=0, background=True
         )
     except Exception as e:
         logger.warning(f"Index creation warning: {e}")
@@ -189,7 +196,7 @@ def _decode_token(token: str) -> dict:
 # Auth dependencies
 # ---------------------------------------------------------------------------
 async def get_current_user(authorization: str = Header(...)) -> dict:
-    """Validate Bearer token and return the user document from MongoDB."""
+    """Validate Bearer token and ensure an active session exists in MongoDB."""
     if not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Invalid authorization header.")
     token = authorization[7:]
@@ -199,6 +206,11 @@ async def get_current_user(authorization: str = Header(...)) -> dict:
     db = get_db()
     if db is None:
         raise HTTPException(status_code=503, detail="Database unavailable.")
+
+    # Validate active session in database
+    session = await db["sessions"].find_one({"token": token, "is_active": True})
+    if not session:
+        raise HTTPException(status_code=401, detail="Session expired or invalidated. Please sign in again.")
 
     try:
         obj_id = ObjectId(user_id)
@@ -249,30 +261,69 @@ def _generate_otp() -> str:
 
 
 def _send_otp_email(email: str, first_name: str, otp: str):
-    email_host = os.getenv("EMAIL_HOST")
-    if not email_host:
-        logger.warning(f"No EMAIL_HOST configured. OTP for {email}: {otp}")
-        print(f"\n[DEV MODE] OTP for {email}: {otp}\n")
+    # Always print prominently so developers/testers can find the OTP in server console
+    print(
+        f"\n{'='*60}\n"
+        f"[EMAIL OTP] Code for {email}: {otp}\n"
+        f"Valid for 10 minutes\n"
+        f"{'='*60}\n",
+        flush=True,
+    )
+
+    email_host = os.getenv("EMAIL_HOST", "").strip()
+    email_user = os.getenv("EMAIL_USER", "").strip()
+    email_password = os.getenv("EMAIL_PASSWORD", "").strip()
+    email_port_str = os.getenv("EMAIL_PORT", "587").strip()
+    try:
+        email_port = int(email_port_str)
+    except ValueError:
+        email_port = 587
+
+    if not email_host or not email_user or not email_password:
+        logger.warning(
+            f"Incomplete EMAIL configuration in environment. OTP verification code for {email}: {otp}"
+        )
         return
+
+    clean_password = email_password.replace(" ", "")
+
     try:
         msg = EmailMessage()
         msg.set_content(
             f"Hello {first_name},\n\n"
             f"Your verification code is:\n\n  {otp}\n\n"
-            "This code expires in 10 minutes.\n\nMelanoma Detection Team"
+            "This code expires in 10 minutes.\n\n"
+            "If you did not request this code, you can safely ignore this email.\n\n"
+            "Melanoma Detection Team"
         )
         msg["Subject"] = "Verify your Melanoma Detection account"
-        msg["From"]    = os.getenv("EMAIL_USER", "noreply@meladetect.local")
-        msg["To"]      = email
-        server = smtplib.SMTP(email_host, int(os.getenv("EMAIL_PORT", 587)))
-        server.starttls()
-        server.login(os.getenv("EMAIL_USER"), os.getenv("EMAIL_PASSWORD"))
-        server.send_message(msg)
-        server.quit()
-        logger.info(f"OTP sent to {email}")
+        msg["From"] = email_user
+        msg["To"] = email
+
+        if email_port == 465:
+            ctx = ssl.create_default_context()
+            with smtplib.SMTP_SSL(email_host, email_port, context=ctx, timeout=15) as server:
+                server.login(email_user, clean_password)
+                server.send_message(msg)
+        else:
+            with smtplib.SMTP(email_host, email_port, timeout=15) as server:
+                server.ehlo()
+                server.starttls()
+                server.ehlo()
+                server.login(email_user, clean_password)
+                server.send_message(msg)
+        logger.info(f"OTP successfully emailed to {email}")
+    except smtplib.SMTPAuthenticationError as exc:
+        logger.error(
+            f"SMTP authentication failed for {email_user}: {exc}\n"
+            "Note: Google requires a valid App Password (https://myaccount.google.com/apppasswords).\n"
+            f"--> Active OTP code for {email}: {otp}"
+        )
     except Exception as exc:
-        logger.error(f"Email failed for {email}: {exc}")
-        print(f"\n[EMAIL FAILED] OTP for {email}: {otp}\n")
+        logger.error(
+            f"Failed to deliver OTP email to {email}: {exc}\n"
+            f"--> Active OTP code for {email}: {otp}"
+        )
 
 
 async def _check_rate_limit(
@@ -346,7 +397,11 @@ async def signup(body: SignupRequest):
         daemon=True,
     ).start()
 
-    return {"message": "OTP sent to email.", "email": email, "otp": otp}
+    res = {"message": "Verification code sent to email.", "email": email}
+    dev_fallback = os.getenv("DEV_OTP", "true").lower() in ("true", "1", "yes")
+    if dev_fallback:
+        res["dev_otp"] = otp
+    return res
 
 
 @router.post("/verify-email")
@@ -429,7 +484,11 @@ async def resend_otp(body: ResendOtpRequest):
         daemon=True,
     ).start()
 
-    return {"message": "A new verification code has been sent.", "otp": otp}
+    res = {"message": "A new verification code has been sent."}
+    dev_fallback = os.getenv("DEV_OTP", "true").lower() in ("true", "1", "yes")
+    if dev_fallback:
+        res["dev_otp"] = otp
+    return res
 
 
 @router.post("/login", response_model=AuthResponse)
@@ -447,6 +506,17 @@ async def login(body: LoginRequest):
 
     user_id = str(row["_id"])
     token   = _create_token(user_id, row["email"])
+
+    # Maintain active session in database with TTL
+    exp_dt = datetime.now(timezone.utc) + timedelta(hours=JWT_EXPIRY_HOURS)
+    await db["sessions"].insert_one({
+        "token": token,
+        "user_id": user_id,
+        "email": row["email"],
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "expires_at_dt": exp_dt,
+        "is_active": True,
+    })
 
     return AuthResponse(
         token=token,
@@ -564,3 +634,18 @@ async def change_password(
         {"$set": {"password_hash": new_hash}},
     )
     return {"message": "Password changed successfully."}
+
+
+@router.post("/logout")
+async def logout(authorization: str = Header(...)):
+    """Revoke the current active session in MongoDB."""
+    if not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Invalid authorization header.")
+    token = authorization[7:]
+    db = get_db()
+    if db is not None:
+        await db["sessions"].update_one(
+            {"token": token},
+            {"$set": {"is_active": False, "revoked_at": datetime.now(timezone.utc).isoformat()}},
+        )
+    return {"message": "Logged out successfully."}

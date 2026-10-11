@@ -10,7 +10,6 @@ export default function Signup({ onNavigate }) {
 
   const [step, setStep] = useState('form'); // 'form' | 'verify'
   const [registeredEmail, setRegisteredEmail] = useState('');
-  const [receivedOtp, setReceivedOtp] = useState('');
 
   const [form, setForm] = useState({
     first_name: '',
@@ -22,6 +21,7 @@ export default function Signup({ onNavigate }) {
   });
 
   const [otp, setOtp] = useState('');
+  const [devOtpCode, setDevOtpCode] = useState('');
   const [otpError, setOtpError] = useState('');
   const [errors, setErrors] = useState({});
   const [apiError, setApiError] = useState('');
@@ -87,11 +87,14 @@ export default function Signup({ onNavigate }) {
         password: form.password,
       });
       setRegisteredEmail(data.email || form.email.trim());
-      if (data.otp) {
-        setReceivedOtp(data.otp);
-      }
       setStep('verify');
-      showToast('Verification code sent!', 'success');
+      if (data?.dev_otp) {
+        setDevOtpCode(data.dev_otp);
+        setOtp(data.dev_otp);
+        showToast(`Verification code: ${data.dev_otp}`, 'info');
+      } else {
+        showToast('Verification code sent!', 'success');
+      }
     } catch (err) {
       if (err.message?.includes('already exists') || err.message?.includes('Already Used')) {
         setShowDuplicateModal(true);
@@ -127,12 +130,15 @@ export default function Signup({ onNavigate }) {
     setLoading(true);
     try {
       const data = await resendOtp(registeredEmail);
-      showToast('A new verification code has been sent.', 'success');
-      if (data?.otp) {
-        setReceivedOtp(data.otp);
+      if (data?.dev_otp) {
+        setDevOtpCode(data.dev_otp);
+        setOtp(data.dev_otp);
+        showToast(`New verification code: ${data.dev_otp}`, 'info');
+      } else {
+        showToast('A new verification code has been sent.', 'success');
+        setOtp('');
       }
       setOtpError('');
-      setOtp('');
     } catch (err) {
       setOtpError(err.message || 'Failed to resend code.');
     } finally {
@@ -326,59 +332,43 @@ export default function Signup({ onNavigate }) {
             )}
 
             <form onSubmit={handleVerify}>
-              <div className="form-group" style={{ textAlign: 'center' }}>
-                <label className="form-label" style={{ marginBottom: '8px' }}>
-                  6-Digit Verification Code
-                </label>
-                {receivedOtp && (
-                  <div
-                    style={{
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      gap: '8px',
-                      padding: '8px 14px',
-                      marginBottom: '14px',
-                      background: 'var(--adm-primary-soft, rgba(15, 118, 110, 0.08))',
-                      border: '1px dashed var(--primary-color, #0F766E)',
-                      borderRadius: '8px',
-                      fontSize: '13px',
-                      color: 'var(--text-secondary, #475569)',
-                    }}
-                  >
-                    <span>Code:</span>
-                    <strong
-                      style={{
-                        fontSize: '17px',
-                        fontWeight: 700,
-                        letterSpacing: '3px',
-                        color: 'var(--primary-color, #0F766E)',
-                        fontFamily: 'monospace',
-                        cursor: 'pointer',
-                      }}
-                      onClick={() => setOtp(receivedOtp)}
-                      title="Click to insert"
-                    >
-                      {receivedOtp}
-                    </strong>
+              {devOtpCode && (
+                <div
+                  style={{
+                    background: 'rgba(59, 130, 246, 0.08)',
+                    border: '1px solid rgba(59, 130, 246, 0.3)',
+                    borderRadius: '8px',
+                    padding: '12px 14px',
+                    marginBottom: '16px',
+                    textAlign: 'center',
+                  }}
+                >
+                  <div style={{ fontSize: '11px', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '4px' }}>
+                    Verification Code
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '10px' }}>
+                    <span style={{ fontSize: '22px', fontWeight: 700, letterSpacing: '4px', color: 'var(--primary-color, #2563eb)' }}>
+                      {devOtpCode}
+                    </span>
                     <button
                       type="button"
-                      onClick={() => setOtp(receivedOtp)}
-                      style={{
-                        background: 'none',
-                        border: 'none',
-                        color: 'var(--primary-color, #0F766E)',
-                        fontSize: '12px',
-                        fontWeight: 600,
-                        cursor: 'pointer',
-                        padding: '2px 4px',
-                        textDecoration: 'underline',
-                      }}
+                      className="btn btn-sm btn-outline"
+                      style={{ padding: '3px 10px', fontSize: '12px', height: 'auto', cursor: 'pointer' }}
+                      onClick={() => setOtp(devOtpCode)}
                     >
-                      Auto-fill
+                      Fill Code
                     </button>
                   </div>
-                )}
+                </div>
+              )}
+
+              <div className="form-group" style={{ textAlign: 'center' }}>
+                <label className="form-label" style={{ marginBottom: '6px' }}>
+                  6-Digit Verification Code
+                </label>
+                <p style={{ fontSize: '13px', color: 'var(--text-secondary)', marginBottom: '14px' }}>
+                  Please enter the 6-digit code sent to <strong>{registeredEmail}</strong>
+                </p>
                 <input
                   type="text"
                   maxLength={6}
@@ -389,7 +379,7 @@ export default function Signup({ onNavigate }) {
                     textAlign: 'center',
                     fontWeight: 600,
                   }}
-                  placeholder={receivedOtp || "123456"}
+                  placeholder="------"
                   value={otp}
                   onChange={(e) => setOtp(e.target.value.replace(/\D/g, ''))}
                   autoFocus

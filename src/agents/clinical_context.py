@@ -1,10 +1,10 @@
-"""Clinical Context Agent: asks for, normalizes, and never invents history."""
+"""Clinical Context Handler: internal component of Evidence Agent for patient history and evolution."""
 from __future__ import annotations
 from typing import Any, Dict, List
 from .state import ABCDEFeature, CaseState
 
-class ClinicalContextAgent:
-    name = "clinical_context"
+class ClinicalContextHandler:
+    name = "evidence"
     QUESTION_MAP = {"evolution": "Has the lesion changed in size, shape, color, elevation, or symptoms? If so, over what time period?"}
 
     def update(self, state: CaseState, supplied: Dict[str, Any] | None = None) -> CaseState:
@@ -84,7 +84,7 @@ class ClinicalContextAgent:
             raise RuntimeError("GEMINI_API_KEY environment variable is not set.")
             
         client = genai.Client(api_key=api_key)
-        model_name = config.get("model") or os.environ.get("GEMINI_MODEL", "gemini-3.6-flash")
+        model_name = config.get("model") or os.environ.get("GEMINI_MODEL", "gemini-3.8-flash")
 
         
         label_map = {0: "Earliest image", len(image_paths) - 1: "Most recent image"}
@@ -266,3 +266,7 @@ class ClinicalContextAgent:
         if days < 30: return f"~{days // 7} week(s)"
         if days < 365: return f"~{days // 30} month(s)"
         return f"~{days // 365} year(s)"
+
+# Backward-compatibility alias: ClinicalContextAgent is an internal component of EvidenceAgent
+ClinicalContextAgent = ClinicalContextHandler
+__all__ = ["ClinicalContextHandler", "ClinicalContextAgent"]

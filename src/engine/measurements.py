@@ -63,7 +63,7 @@ def _project_contour_to_mm(
 
 def refine_lesion_mask(
     mask: np.ndarray,
-    max_area_ratio: float = 0.35,
+    max_area_ratio: float = 0.90,
     excluded_bbox: Optional[tuple[int, int, int, int]] = None,
 ) -> np.ndarray:
     """Keep the most plausible interior lesion component.
@@ -110,6 +110,29 @@ def refine_lesion_mask(
         compactness = min(float(area) / max(float(w * h), 1.0), 1.0)
         score = np.log1p(float(area)) * (0.55 + 0.30 * centre_score + 0.15 * compactness)
         candidates.append((score, component))
+
+    if not candidates:
+        # Fallback: if all components touch the image boundary, allow the largest/most-centered non-excluded component
+        for component in range(1, count):
+            x, y, w, h, area = stats[component]
+            if area < max(25, image_area * 0.0002) or area / image_area >= max_area_ratio:
+                continue
+            if excluded_bbox is not None:
+                ref_x, ref_y, ref_w, ref_h = excluded_bbox
+                overlap_x = max(0, min(x + w, ref_x + ref_w) - max(x, ref_x))
+                overlap_y = max(0, min(y + h, ref_y + ref_h) - max(y, ref_y))
+                overlap_area = overlap_x * overlap_y
+                centroid_x, centroid_y = centroids[component]
+                if (
+                    overlap_area / max(float(area), 1.0) >= 0.20
+                    or (ref_x <= centroid_x <= ref_x + ref_w and ref_y <= centroid_y <= ref_y + ref_h)
+                ):
+                    continue
+            cx, cy = centroids[component]
+            centre_score = 1.0 - min(float(np.hypot(cx - image_cx, cy - image_cy)) / max_distance, 1.0)
+            compactness = min(float(area) / max(float(w * h), 1.0), 1.0)
+            score = np.log1p(float(area)) * (0.55 + 0.30 * centre_score + 0.15 * compactness)
+            candidates.append((score, component))
 
     if not candidates:
         raise ValueError("segmentation mask has no plausible interior lesion component")

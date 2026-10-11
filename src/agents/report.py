@@ -21,6 +21,11 @@ class ReportAgent:
         
         # Call the explain method to get an ExplanationResult
         state.explanation_result = service.explain(state.diagnosis_result, state.evidence)
+        if state.explanation_result and state.grad_cam_saved_path:
+            from pathlib import Path
+            cam_name = Path(state.grad_cam_saved_path).name
+            setattr(state.explanation_result, "grad_cam_saved_path", state.grad_cam_saved_path)
+            setattr(state.explanation_result, "grad_cam_url", f"/static/outputs/gradcam_samples/{cam_name}")
         
         # Populate the legacy explanation dict for report payload
         state.explanation = vars(state.explanation_result) if state.explanation_result else {}
@@ -35,7 +40,7 @@ class ReportAgent:
         # PDF is an optional rendering tool. Failure to render it must not
         # invalidate the structured report, which remains the source of truth.
         pdf_path = None
-        if state.diagnosis_result is not None:
+        if state.diagnosis_result is not None and self.config.get("save_pdf", False):
             try:
                 from .explainability import ExplanationResult
                 from .report_generator import ReportRenderer

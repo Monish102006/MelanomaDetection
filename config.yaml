@@ -74,9 +74,9 @@ classification:
 # Module 4 — SegFormer Segmentation
 # ---------------------------------------------------------------------------
 segmentation:
-  checkpoint: checkpoints/segformer_best.pt
+  checkpoint: checkpoints/best_segformer_melanoma.pth
   encoder_name: mit_b2
-  input_size: 512
+  input_size: 256
   morphological_closing_kernel: 5
 
 # ---------------------------------------------------------------------------
@@ -121,15 +121,20 @@ evidence:
 explainability:
   mode: llm                    # template | llm
   llm_provider: gemini          # gemini (requires GEMINI_API_KEY env var)
-  model: gemini-3.6-flash
+  model: gemini-3.8-flash
+  fallback_model: gemini-3.1-flash-lite
+  max_retries: 5
+  retry_delay: 3.0
+  fallback_after_retries: 3
   gradcam_ail_threshold: 0.30
-  compute_gradcam: false
+  compute_gradcam: true
 
 # ---------------------------------------------------------------------------
 # Report Agent rendering tool
 # ---------------------------------------------------------------------------
 report:
   output_dir: outputs/reports/
+  save_pdf: false
   include_gradcam: true
   include_evidence: true
 

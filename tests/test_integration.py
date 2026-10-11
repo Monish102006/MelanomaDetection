@@ -31,12 +31,14 @@ def config():
 
 @pytest.fixture(scope="module")
 def test_image_path():
-    """Find a small test image from uploads/ directory."""
+    """Find a test dermoscopy image."""
+    test_img = PROJECT_ROOT / "test_images" / "test.jpg"
+    if test_img.exists():
+        return str(test_img)
     uploads = PROJECT_ROOT / "uploads"
-    images = sorted(uploads.glob("*.png"), key=lambda p: p.stat().st_size)
-    images = [img for img in images if img.stat().st_size > 1000]
+    images = sorted([img for img in uploads.glob("*.png") if img.stat().st_size > 200000], key=lambda p: p.stat().st_size)
     if not images:
-        pytest.skip("No test images found in uploads/")
+        pytest.skip("No test images found")
     return str(images[0])
 
 
@@ -53,7 +55,7 @@ def swin_checkpoint_path(config):
 @pytest.fixture(scope="module")
 def segformer_checkpoint_path(config):
     seg_cfg = config.get("segmentation", {})
-    path = seg_cfg.get("checkpoint", "checkpoints/segformer_best.pt")
+    path = seg_cfg.get("checkpoint", "checkpoints/best_segformer_melanoma.pth")
     full_path = PROJECT_ROOT / path
     if not full_path.is_file():
         pytest.skip(f"SegFormer checkpoint not found: {full_path}")

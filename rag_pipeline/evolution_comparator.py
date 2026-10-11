@@ -6,7 +6,10 @@ from typing import Any, Iterable, Optional
 import cv2
 import numpy as np
 
-from evolution_models import EvolutionComparisonResult
+try:
+    from .evolution_models import EvolutionComparisonResult
+except ImportError:
+    from rag_pipeline.evolution_models import EvolutionComparisonResult
 
 
 class EvolutionComparator:

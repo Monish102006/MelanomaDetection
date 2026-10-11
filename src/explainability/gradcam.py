@@ -213,6 +213,49 @@ class SwinGradCAM:
 
         print(f"Grad-CAM saved: {output_dir / f'{stem}_gradcam.png'}")
 
+    def save_cam_visual(
+        self,
+        cam_result: dict,
+        output_path: str | Path,
+        stem: str = "gradcam",
+    ) -> str:
+        """
+        Save the Grad-CAM visual (overlay heatmap on original image) as a PNG file.
+
+        Args:
+            cam_result: Dict returned by generate() or generate_from_array().
+            output_path: Destination file path or directory.
+            stem: File stem if output_path is a directory.
+
+        Returns:
+            The saved file path as a string.
+        """
+        out_path = Path(output_path)
+        if out_path.is_dir() or not out_path.suffix:
+            out_path.mkdir(parents=True, exist_ok=True)
+            out_file = out_path / f"{stem}_gradcam.png"
+        else:
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            out_file = out_path
+
+        overlay = cam_result.get("overlay")
+        if overlay is None:
+            heatmap = cam_result.get("heatmap")
+            if heatmap is not None:
+                orig = cam_result.get("original", np.ones_like(heatmap)[:, :, None])
+                overlay = show_cam_on_image(orig, heatmap, use_rgb=True)
+            else:
+                return ""
+
+        if isinstance(overlay, np.ndarray):
+            if overlay.max() <= 1.0:
+                overlay_uint8 = np.clip(overlay * 255.0, 0, 255).astype(np.uint8)
+            else:
+                overlay_uint8 = np.clip(overlay, 0, 255).astype(np.uint8)
+            Image.fromarray(overlay_uint8).save(str(out_file), format="PNG")
+            return str(out_file)
+        return ""
+
     def generate_from_array(
         self, image: np.ndarray, target_class: Optional[int] = None
     ) -> dict:
